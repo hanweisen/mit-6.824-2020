@@ -6,24 +6,38 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
-import "strconv"
-
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
+import (
+	"os"
+	"strconv"
+)
 
 // Add your RPC definitions here.
 
+//worker向master发送的心跳信息
+type Request struct {
+	WorkerId string
+	//剩余可以运行的任务数量
+	RemainSlot int
+	//运行中任务状态回报
+	TaskReports []*TaskReport
+}
+
+type TaskReport struct {
+	TaskId int
+	State  State
+	Output []string
+}
+
+type Response struct {
+	CurrentStage Stage
+	AssignTasks  []*AssignTask
+	ReduceCount  int
+}
+
+type AssignTask struct {
+	Id    int
+	Input []string
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
