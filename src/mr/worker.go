@@ -62,12 +62,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	if err != nil {
 		panic(err)
 	}
-	executor := &Executor{taskChan: make(chan *CompletedTask, 100)}
+	slot := 1
+	executor := &Executor{taskChan: make(chan *CompletedTask, slot+1)}
 	executor.id = "worker-" + name + "-" + strconv.Itoa(pid)
 	executor.mapF = mapf
 	executor.reduceF = reducef
 	//parallelism测试这里必须设置为1才能通过
-	executor.slot = 1
+	executor.slot = slot
 	executor.remainSlot = executor.slot
 	executor.logger = log.New(os.Stdout, executor.id+" ", log.Lshortfile|log.LstdFlags)
 	executor.logger.Println("worker created")
@@ -140,6 +141,14 @@ func (executor *Executor) heartBeat() {
 }
 
 func (executor *Executor) executeMapF(assignTask *AssignTask, nReduce int) {
+	outputs := []string{}
+	defer func() {
+		if err := recover(); err != nil {
+			executor.taskChan <- &CompletedTask{id: assignTask.Id, output: outputs, state: Failure}
+		} else {
+			executor.taskChan <- &CompletedTask{id: assignTask.Id, output: outputs, state: Success}
+		}
+	}()
 	executor.logger.Println("execute map task", assignTask.Id, "with input", assignTask.Input)
 	path := assignTask.Input[0]
 	content := readContent(path)
@@ -148,7 +157,6 @@ func (executor *Executor) executeMapF(assignTask *AssignTask, nReduce int) {
 	ofiles := []*os.File{}
 	encs := []*json.Encoder{}
 	suffix := "." + executor.id + ".tmp"
-	outputs := []string{}
 	for i := 0; i < nReduce; i++ {
 		oname := "mr-" + strconv.Itoa(assignTask.Id) + "-" + strconv.Itoa(i) + suffix
 		outputs = append(outputs, strings.TrimSuffix(oname, suffix))
@@ -167,10 +175,18 @@ func (executor *Executor) executeMapF(assignTask *AssignTask, nReduce int) {
 		os.Rename(file.Name(), strings.TrimSuffix(file.Name(), suffix))
 	}
 	executor.logger.Println("map task with id ", assignTask.Id, "execute success")
-	executor.taskChan <- &CompletedTask{id: assignTask.Id, output: outputs}
 }
 
 func (executor *Executor) executorReduceF(assignTask *AssignTask) {
+	var oname string
+	defer func() {
+		if err := recover(); err != nil {
+			executor.taskChan <- &CompletedTask{id: assignTask.Id, output: []string{oname}, state: Failure}
+		} else {
+			executor.taskChan <- &CompletedTask{id: assignTask.Id, output: []string{oname}, state: Success}
+
+		}
+	}()
 	executor.logger.Println("execute reduce task with id:", assignTask.Id, "with inputs", assignTask.Input)
 	kvs := []KeyValue{}
 	ifiles := []*os.File{}
@@ -195,7 +211,7 @@ func (executor *Executor) executorReduceF(assignTask *AssignTask) {
 	sort.Sort(ByKey(kvs))
 	split := []string{}
 	suffix := "." + executor.id + ".tmp"
-	oname := "mr-out-" + strconv.Itoa(assignTask.Id) + suffix
+	oname = "mr-out-" + strconv.Itoa(assignTask.Id) + suffix
 	ofile, _ := os.Create(oname)
 	defer func() {
 		ofile.Close()
@@ -215,7 +231,6 @@ func (executor *Executor) executorReduceF(assignTask *AssignTask) {
 		fmt.Fprintf(ofile, "%v %v\n", kvs[i].Key, output)
 		i = j
 	}
-	executor.taskChan <- &CompletedTask{id: assignTask.Id, output: []string{oname}}
 }
 
 func readContent(path string) string {

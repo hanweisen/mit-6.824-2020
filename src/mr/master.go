@@ -145,7 +145,7 @@ func (m *Master) checker() {
 						task.SetState(Failure)
 						m.executing.terminated = append(m.executing.terminated, task)
 					} else {
-						logger.Println("stage", m.stage, ",put task", task.GetId, "in waiting")
+						logger.Println("stage", m.stage, ",put task", task.GetId(), "in waiting")
 						task.SetState(Init)
 						m.executing.waiting = append(m.executing.waiting, task)
 					}
@@ -173,7 +173,16 @@ func (m *Master) HeartBeat(request *Request, response *Response) error {
 	//update worker status
 	m.updateWorkerStatus(request, now)
 	logger.Println("received report", len(request.TaskReports))
-	//update taskstate
+	m.updateTaskState(request)
+	m.changeState()
+	m.assignTask(request, response)
+
+	logger.Println("current stage", m.stage)
+	response.CurrentStage = m.stage
+	return nil
+}
+
+func (m *Master) updateTaskState(request *Request) {
 	for _, report := range request.TaskReports {
 		finishedTask, exist := m.executing.running[report.TaskId]
 		if !exist {
@@ -187,16 +196,15 @@ func (m *Master) HeartBeat(request *Request, response *Response) error {
 		}
 		m.executing.terminated = append(m.executing.terminated, finishedTask)
 	}
-	//change stage
-	m.changeState()
-	//asign task
+}
+
+func (m *Master) assignTask(request *Request, response *Response) {
+	now := time.Now()
 	for request.RemainSlot > 0 && len(m.executing.waiting) > 0 {
 		request.RemainSlot--
-
 		assignTask := m.executing.waiting[0]
 		m.executing.waiting = m.executing.waiting[1:]
 		m.executing.running[assignTask.GetId()] = assignTask
-
 		assignTask.SetState(Running)
 		assignTask.SetAssignWorker(request.WorkerId)
 		assignTask.SetStartTime(now)
@@ -211,9 +219,6 @@ func (m *Master) HeartBeat(request *Request, response *Response) error {
 			panic("error stage")
 		}
 	}
-	logger.Println("current stage", m.stage)
-	response.CurrentStage = m.stage
-	return nil
 }
 
 func (m *Master) changeState() {
@@ -244,12 +249,13 @@ func (m *Master) changeState() {
 		for i := 0; i < m.nreduce; i++ {
 			reduceTask := &ReduceTask{}
 			reduceTask.id = i
+			reduceTask.state = Init
 			newWaiting = append(newWaiting, reduceTask)
 		}
 		newExecuting.waiting = newWaiting
 		for _, task := range executing.terminated {
 			mapTask := task.(*MapTask)
-			logger.Println("task", mapTask.id, mapTask.state)
+			logger.Println("map task", mapTask.id, mapTask.state)
 			for _, input := range mapTask.output {
 				id := getSplitId(input)
 				reduceTask := newWaiting[id].(*ReduceTask)
@@ -257,7 +263,6 @@ func (m *Master) changeState() {
 			}
 		}
 		m.executing = newExecuting
-	//考虑map可能会失败的情况，那么我这个逻辑肯定有问题
 	case ReduceStage:
 		logger.Println("reduce tasks completed")
 		m.stage = TerminatedStage
